@@ -13,6 +13,6 @@ An end-to-end MLOps pipeline using the California Housing dataset — includes d
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/<your-username>/mlops-california-housing-pipeline.git
+git clone
 cd mlops-california-housing-pipeline
 pip install -r requirements.txt
