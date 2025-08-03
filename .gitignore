@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pkl
+*.log
+mlruns/
+data/
+models/
+.env
+*.db
+.dvc/
+.env/
