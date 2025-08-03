@@ -3,9 +3,10 @@ __pycache__/
 *.pkl
 *.log
 mlruns/
-data/
+data/raw/*.csv
 models/
 .env
 *.db
-.dvc/
 .env/
+.idea
+mlops
