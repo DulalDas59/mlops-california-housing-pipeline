@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-*.pkl
+#*.pkl
 *.log
 mlruns/
 data/raw/*.csv
