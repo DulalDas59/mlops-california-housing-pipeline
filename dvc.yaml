@@ -1,0 +1,12 @@
+stages:
+  train:
+    cmd: python src/train.py --input data/raw/housing.csv --out models/dt.pkl 
+      --metrics metrics.json
+    deps:
+    - data/raw/housing.csv
+    - src/train.py
+    outs:
+    - models/dt.pkl
+    metrics:
+    - metrics.json:
+        cache: false

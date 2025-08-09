@@ -1,51 +1,155 @@
 # src/train.py
-
-import os
-import mlflow
-import mlflow.sklearn
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.linear_model import LinearRegression
-from sklearn.tree import DecisionTreeRegressor
 import argparse
+import json
+import os
+from typing import Dict, Any
 
-def load_data(path):
+import joblib
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeRegressor
+
+
+def load_dataset(path: str) -> pd.DataFrame:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Input CSV not found: {path}")
     df = pd.read_csv(path)
-    return train_test_split(df.drop("MedHouseVal", axis=1), df["MedHouseVal"], test_size=0.2, random_state=42)
+    required_cols = {
+        "MedInc",
+        "HouseAge",
+        "AveRooms",
+        "AveBedrms",
+        "Population",
+        "AveOccup",
+        "Latitude",
+        "Longitude",
+        "MedHouseVal",
+    }
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"CSV is missing required columns: {sorted(missing)}. "
+            "Expected 8 features + target 'MedHouseVal'."
+        )
+    return df
 
-def train_and_log(model_name, model, X_train, X_test, y_train, y_test):
-    with mlflow.start_run(run_name=model_name):
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
 
-        # rmse = mean_squared_error(y_test, preds, squared=False)
-        mse = mean_squared_error(y_test, preds)
-        rmse = np.sqrt(mse)
+def split_xy(df: pd.DataFrame):
+    y = df["MedHouseVal"]
+    X = df.drop(columns=["MedHouseVal"])
+    return X, y
 
-        r2 = r2_score(y_test, preds)
 
-        # Log everything
-        # mlflow.set_tracking_uri("http://localhost:5000")
-        mlflow.log_param("model", model_name)
-        mlflow.log_metric("rmse", rmse)
-        mlflow.log_metric("r2", r2)
-        mlflow.sklearn.log_model(sk_model=model, name="model")
+def eval_regression(y_true, y_pred) -> Dict[str, float]:
+    rmse = float(mean_squared_error(y_true, y_pred, squared=False))
+    r2 = float(r2_score(y_true, y_pred))
+    return {"rmse": rmse, "r2": r2}
 
-        print(f"{model_name} -> RMSE: {rmse:.4f}, R²: {r2:.4f}")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=str, default="data/raw/housing.csv")
+def maybe_log_mlflow(
+    enabled: bool,
+    run_name: str,
+    model_obj: Any,
+    params: Dict[str, Any],
+    metrics: Dict[str, float],
+):
+    if not enabled:
+        return
+    try:
+        import mlflow
+        import mlflow.sklearn
+
+        with mlflow.start_run(run_name=run_name):
+            for k, v in params.items():
+                mlflow.log_param(k, v)
+            for k, v in metrics.items():
+                mlflow.log_metric(k, v)
+            mlflow.sklearn.log_model(model_obj, "model")
+    except Exception as e:
+        # don't fail training if mlflow is misconfigured
+        print(f"[WARN] MLflow logging skipped: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train California Housing models and pick best.")
+    parser.add_argument("--input", required=True, help="Path to input CSV (with MedHouseVal target).")
+    parser.add_argument("--out", required=True, help="Path to save chosen model (joblib).")
+    parser.add_argument("--metrics", required=True, help="Path to write metrics JSON.")
+    parser.add_argument("--test-size", type=float, default=0.2, help="Test split size. Default 0.2")
+    parser.add_argument("--random-state", type=int, default=42, help="Random seed.")
+    parser.add_argument("--max-depth", type=int, default=6, help="DecisionTree max_depth.")
+    parser.add_argument(
+        "--mlflow",
+        action="store_true",
+        help="If set, log runs to MLflow (uses MLFLOW_TRACKING_URI if present).",
+    )
     args = parser.parse_args()
 
-    X_train, X_test, y_train, y_test = load_data(args.input)
+    # 1) Load data
+    df = load_dataset(args.input)
+    X, y = split_xy(df)
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=args.test_size, random_state=args.random_state
+    )
 
-    models = {
-        "LinearRegression": LinearRegression(),
-        "DecisionTree": DecisionTreeRegressor(max_depth=5)
+    # 2) Train models
+    results = {}
+
+    # 2a) Linear Regression
+    lr = LinearRegression(n_jobs=None)
+    lr.fit(X_tr, y_tr)
+    lr_pred = lr.predict(X_te)
+    lr_metrics = eval_regression(y_te, lr_pred)
+    results["LinearRegression"] = {
+        "params": {},
+        "metrics": lr_metrics,
     }
 
-    for name, model in models.items():
-        train_and_log(name, model, X_train, X_test, y_train, y_test)
+    # 2b) Decision Tree
+    dt = DecisionTreeRegressor(max_depth=args.max_depth, random_state=args.random_state)
+    dt.fit(X_tr, y_tr)
+    dt_pred = dt.predict(X_te)
+    dt_metrics = eval_regression(y_te, dt_pred)
+    results["DecisionTreeRegressor"] = {
+        "params": {"max_depth": args.max_depth, "random_state": args.random_state},
+        "metrics": dt_metrics,
+    }
+
+    # 3) Choose best by RMSE
+    best_name = min(results.keys(), key=lambda k: results[k]["metrics"]["rmse"])
+    best_model = {"LinearRegression": lr, "DecisionTreeRegressor": dt}[best_name]
+    best_metrics = results[best_name]["metrics"]
+    best_params = results[best_name]["params"]
+
+    # 4) Persist model atomically
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    tmp_out = args.out + ".tmp"
+    joblib.dump(best_model, tmp_out)
+    os.replace(tmp_out, args.out)
+
+    # 5) Write metrics JSON (both models + chosen)
+    payload = {
+        "chosen_model": best_name,
+        "chosen_metrics": best_metrics,
+        "all_models": results,
+    }
+    with open(args.metrics, "w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+    print(f"[INFO] Saved best model: {best_name} → {args.out}")
+    print(f"[INFO] Metrics: {json.dumps(payload, indent=2)}")
+
+    # 6) Optional MLflow logging
+    maybe_log_mlflow(
+        enabled=args.mlflow,
+        run_name=f"{best_name}_california_housing",
+        model_obj=best_model,
+        params={"model": best_name, **best_params},
+        metrics=best_metrics,
+    )
+
+
+if __name__ == "__main__":
+    main()

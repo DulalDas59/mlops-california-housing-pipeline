@@ -15,6 +15,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional: carry model hash in the image for visibility
+ARG MODEL_VERSION=dev
+ENV MODEL_VERSION=${MODEL_VERSION}
+
 # Copy source
 COPY . .
 
