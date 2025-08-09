@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-#*.pkl
+*.pkl
 *.log
 mlruns/
 .env
@@ -8,3 +8,4 @@ mlruns/
 .env/
 .idea
 mlops/
+models/*.pkl
