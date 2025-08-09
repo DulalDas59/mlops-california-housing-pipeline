@@ -1,40 +1,49 @@
 # api/main.py
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, UploadFile, File, Header, Depends
 from api.schema import BatchRequest
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram
-import joblib
-import logging
+from prometheus_client import Counter, Histogram, Gauge
 from logging.handlers import RotatingFileHandler
-import os
-import sqlite3
-import json
+from threading import Lock
 from datetime import datetime
 from time import perf_counter
+import logging
+import sqlite3
+import pandas as pd
+import mlflow
+import mlflow.sklearn
+import joblib
+import json
+import os
+import io
 
-# ---------- Config ----------
+# =========================
+# Config
+# =========================
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 DB_PATH = os.path.join(LOG_DIR, "predictions.db")
 LOG_PATH = os.path.join(LOG_DIR, "predictions.log")
 MODEL_PATH = os.getenv("MODEL_PATH", "models/dt.pkl")
+API_KEY = os.getenv("API_KEY", "devkey")  # set a secret in env for prod
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# ---------- Logger (file + console, independent of uvicorn) ----------
+# =========================
+# Logging (independent of uvicorn)
+# =========================
 logger = logging.getLogger("housing_api")
 logger.setLevel(logging.INFO)
-# Avoid duplicated handlers if code reloads
 logger.handlers.clear()
-
 file_handler = RotatingFileHandler(LOG_PATH, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
 file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-# ---------- SQLite helpers ----------
+# =========================
+# SQLite helpers
+# =========================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -75,41 +84,65 @@ def log_to_db(client_ip: str, payload: dict, prediction, status: str, latency_ms
     finally:
         conn.close()
 
-# ---------- Load model ----------
+# =========================
+# Load model (initial)
+# =========================
+model = None
+current_model_version = 0
 try:
     model = joblib.load(MODEL_PATH)
-    logger.info(f"Loaded model from {MODEL_PATH}")
+    current_model_version = 1
+    logger.info(f"Loaded model from {MODEL_PATH} (version={current_model_version})")
 except Exception as e:
     logger.exception(f"Failed to load model from {MODEL_PATH}: {e}")
-    model = None  # healthz will report failure
 
-# ---------- FastAPI app ----------
+# =========================
+# FastAPI app
+# =========================
 app = FastAPI(title="California Housing API", version="1.0.0")
 
-# ---------- Prometheus metrics ----------
-PREDICTIONS_TOTAL = Counter(
-    "predictions_total",
-    "Total number of prediction calls",
-    ["status"]
-)
-PREDICTION_LATENCY = Histogram(
-    "prediction_latency_ms",
-    "Prediction latency in milliseconds",
-)
-
-# instrument default HTTP metrics + expose /metrics
+# =========================
+# Prometheus metrics
+# =========================
+# Default HTTP metrics via Instrumentator (exposes /metrics)
 Instrumentator().instrument(app).expose(app, include_in_schema=False, should_gzip=True)
 
-# ---------- Startup ----------
+PREDICTIONS_TOTAL = Counter(
+    "predictions_total", "Total number of prediction calls", ["status"]
+)
+PREDICTION_LATENCY_MS = Histogram(
+    "prediction_latency_ms", "Prediction latency in milliseconds"
+)
+MODEL_VERSION = Gauge("model_version", "Current loaded model version")
+RETRAINS_TOTAL = Counter("retrain_jobs_total", "Total number of successful model retrains")
+
+if current_model_version:
+    MODEL_VERSION.set(current_model_version)
+
+# =========================
+# Dependencies
+# =========================
+def require_api_key(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+model_lock = Lock()
+
+# =========================
+# Startup
+# =========================
 @app.on_event("startup")
 def startup_event():
     init_db()
     logger.info("SQLite initialized at %s", DB_PATH)
 
-# ---------- Endpoints ----------
+# =========================
+# Routes
+# =========================
 @app.get("/")
 def root():
-    return {"message": "California Housing Model is Live 🚀"}
+    return {"message": "California Housing Model is Live 🚀", "version": current_model_version}
 
 @app.get("/healthz")
 def healthz():
@@ -124,7 +157,7 @@ def healthz():
     except Exception:
         db_ok = False
     status = "ok" if (model_ok and db_ok) else "degraded"
-    return {"status": status, "model_loaded": model_ok, "db_ok": db_ok}
+    return {"status": status, "model_loaded": model_ok, "db_ok": db_ok, "model_version": current_model_version}
 
 @app.post("/predict")
 def predict(data: BatchRequest, request: Request):
@@ -146,7 +179,7 @@ def predict(data: BatchRequest, request: Request):
     try:
         preds = model.predict(X).tolist()
         status = "success"
-        return_payload = {"predictions": preds}
+        return_payload = {"predictions": preds, "version": current_model_version}
         return return_payload
     except Exception as e:
         status = "error"
@@ -155,17 +188,17 @@ def predict(data: BatchRequest, request: Request):
     finally:
         latency_ms = (perf_counter() - start) * 1000.0
 
-        # file log (one line per request, not per row)
+        # compact payload for file log
         short_payload = payload_for_log.copy()
-        # keep logs compact
         if len(short_payload["instances"]) > 3:
             short_payload["instances"] = short_payload["instances"][:3] + ["..."]
+
         logger.info(
             "client_ip=%s status=%s latency_ms=%.2f payload=%s",
             client_ip, status, latency_ms, json.dumps(short_payload, ensure_ascii=False),
         )
 
-        # DB log (full payload + predictions if success)
+        # DB log
         try:
             pred_for_db = preds if status == "success" else {"error": True}
         except NameError:
@@ -174,4 +207,68 @@ def predict(data: BatchRequest, request: Request):
 
         # Prometheus
         PREDICTIONS_TOTAL.labels(status=status).inc()
-        PREDICTION_LATENCY.observe(latency_ms)
+        PREDICTION_LATENCY_MS.observe(latency_ms)
+
+# =========================
+# Retrain utilities
+# =========================
+def retrain_from_dataframe(df: pd.DataFrame):
+    if "MedHouseVal" not in df.columns:
+        raise ValueError("Training CSV must include 'MedHouseVal' as target.")
+
+    X = df.drop(columns=["MedHouseVal"])
+    y = df["MedHouseVal"]
+
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_squared_error, r2_score
+    from sklearn.tree import DecisionTreeRegressor
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    with mlflow.start_run(run_name="DecisionTree_retrain"):
+        model_new = DecisionTreeRegressor(max_depth=6, random_state=42)
+        model_new.fit(X_train, y_train)
+        preds = model_new.predict(X_test)
+        rmse = mean_squared_error(y_test, preds, squared=False)
+        r2 = r2_score(y_test, preds)
+
+        mlflow.log_param("model", "DecisionTreeRegressor")
+        mlflow.log_param("max_depth", 6)
+        mlflow.log_metric("rmse", rmse)
+        mlflow.log_metric("r2", r2)
+        mlflow.sklearn.log_model(model_new, "model")
+
+    # persist atomically
+    tmp_path = MODEL_PATH + ".tmp"
+    joblib.dump(model_new, tmp_path)
+    os.replace(tmp_path, MODEL_PATH)
+
+    return {"rmse": float(rmse), "r2": float(r2), "model_path": MODEL_PATH}
+
+@app.post("/retrain")
+def retrain(file: UploadFile = File(...), _: bool = Depends(require_api_key)):
+    # read CSV into DataFrame
+    try:
+        content_bytes = file.file.read()
+        df = pd.read_csv(io.StringIO(content_bytes.decode("utf-8")))
+    except Exception as e:
+        logger.exception(f"Failed to read uploaded CSV: {e}")
+        raise HTTPException(status_code=400, detail="Invalid CSV")
+
+    # train and hot-reload
+    global model, current_model_version
+    with model_lock:
+        try:
+            result = retrain_from_dataframe(df)
+            model = joblib.load(MODEL_PATH)
+            current_model_version += 1
+            MODEL_VERSION.set(current_model_version)
+            RETRAINS_TOTAL.inc()
+            logger.info(
+                "Model reloaded from %s, version=%d, metrics=%s",
+                MODEL_PATH, current_model_version, result
+            )
+            return {"status": "ok", "version": current_model_version, "metrics": result}
+        except Exception as e:
+            logger.exception(f"Retrain failed: {e}")
+            raise HTTPException(status_code=500, detail="Retrain failed")
