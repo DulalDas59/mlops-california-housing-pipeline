@@ -9,3 +9,4 @@ mlruns/
 .idea
 mlops/
 models/*.pkl
+data/raw/*.csv
