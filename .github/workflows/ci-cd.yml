@@ -1,39 +1,121 @@
-# .github/workflows/ci-cd.yml
-
-name: CI/CD Pipeline
+name: Retrain, Test, and Build (DVC → Docker)
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'api/**'
+      - 'data/raw/**'
+      - 'dvc.yaml'
+      - 'dvc.lock'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/ci-cd.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'api/**'
+      - 'data/raw/**'
+      - 'dvc.yaml'
+      - 'dvc.lock'
+      - 'requirements.txt'
+      - 'Dockerfile'
+  workflow_dispatch: {}
 
 jobs:
-  build-and-deploy:
+  train_test_build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: 3.11
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
-    - name: Run FastAPI lint check (optional)
-      run: |
-        echo "Checking API imports"
-        python -c "import fastapi, uvicorn"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install dvc
+          # Optional linters/test (comment out if not used)
+          pip install pytest
+          # pip install ruff  # or flake8
 
-    - name: Log in to Docker Hub
-      run: echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+      # ----- Lint & Tests (optional but recommended) -----
+      - name: Lint (ruff optional)
+        if: false  # set to true and configure if you add ruff/flake8
+        run: ruff check .
 
-    - name: Build Docker image
-      run: docker build -t ${{ secrets.DOCKER_USER }}/housing-api:latest .
+      - name: Run unit tests
+        if: false  # set to true when you add tests
+        run: pytest -q
 
-    - name: Push Docker image
-      run: docker push ${{ secrets.DOCKER_USER }}/housing-api:latest
+      # ----- Retrain via DVC (repro builds models/model.pkl) -----
+      - name: Reproduce DVC pipeline
+        run: dvc repro
+
+      - name: Verify model exists
+        run: ls -l models && test -f models/dt.pkl
+
+      - name: Show metrics (optional)
+        run: |
+          if [ -f metrics.json ]; then
+            echo "=== metrics.json ==="
+            cat metrics.json
+          fi
+
+      # ----- Build decision: skip Docker if model unchanged vs previous commit -----
+      - name: Detect model file change vs previous commit
+        id: modeldiff
+        run: |
+          set -e
+          git fetch --depth=2 origin ${{ github.ref }}
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            if git diff --quiet HEAD^ -- models/dt.pkl; then
+              echo "changed=false" >> $GITHUB_OUTPUT
+            else
+              echo "changed=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT  # first run
+          fi
+          echo "Model changed? ${{ steps.modeldiff.outputs.changed }}"
+
+      - name: Compute model hash (for image tag)
+        id: mh
+        if: steps.modeldiff.outputs.changed == 'true'
+        run: echo "hash=$(sha256sum models/dt.pkl | cut -c1-12)" >> $GITHUB_OUTPUT
+
+      # ----- Build & Push Docker image (only if model changed) -----
+      - name: Docker login
+        if: steps.modeldiff.outputs.changed == 'true'
+        run: echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+      - name: Build & push image
+        if: steps.modeldiff.outputs.changed == 'true'
+        run: |
+          IMG=${{ secrets.DOCKER_USER }}/housing-api
+          TAG=${{ steps.mh.outputs.hash }}
+          docker build --build-arg MODEL_VERSION=${TAG} -t $IMG:$TAG -t $IMG:latest .
+          docker push $IMG:$TAG
+          docker push $IMG:latest
+
+      # Keep a copy of the trained model in the run artifacts (optional)
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-pkl
+          path: models/dt.pkl
+          if-no-files-found: error
