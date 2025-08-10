@@ -108,6 +108,14 @@ def main():
         "params": {},
         "metrics": lr_metrics,
     }
+    # NEW: log LR to MLflow (separate run)
+    maybe_log_mlflow(
+        enabled=args.mlflow,
+        run_name="LinearRegression",
+        model_obj=lr,
+        params={},
+        metrics=lr_metrics,
+    )
 
     # 2b) Decision Tree
     dt = DecisionTreeRegressor(max_depth=args.max_depth, random_state=args.random_state)
@@ -118,6 +126,14 @@ def main():
         "params": {"max_depth": args.max_depth, "random_state": args.random_state},
         "metrics": dt_metrics,
     }
+    # NEW: log DT to MLflow (separate run)
+    maybe_log_mlflow(
+        enabled=args.mlflow,
+        run_name="DecisionTreeRegressor",
+        model_obj=dt,
+        params={"max_depth": args.max_depth, "random_state": args.random_state},
+        metrics=dt_metrics,
+    )
 
     # 3) Choose best by RMSE
     best_name = min(results.keys(), key=lambda k: results[k]["metrics"]["rmse"])
@@ -143,10 +159,10 @@ def main():
     print(f"[INFO] Saved best model: {best_name} → {args.out}")
     print(f"[INFO] Metrics: {json.dumps(payload, indent=2)}")
 
-    # 6) Optional MLflow logging
+    # 6) Optional MLflow logging (best model run)
     maybe_log_mlflow(
         enabled=args.mlflow,
-        run_name=f"{best_name}_california_housing",
+        run_name=f"{best_name}_BestModel",
         model_obj=best_model,
         params={"model": best_name, **best_params},
         metrics=best_metrics,

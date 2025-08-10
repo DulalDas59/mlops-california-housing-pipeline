@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     # Where our app writes logs (api/main.py uses this)
     LOG_DIR=/app/logs \
     # Where the model is loaded from (api/main.py uses this)
-    MODEL_PATH=/app/models/dt.pkl
+    MODEL_PATH=/app/models/model.pkl
 
 WORKDIR /app
 

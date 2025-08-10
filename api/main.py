@@ -23,7 +23,7 @@ import io
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 DB_PATH = os.path.join(LOG_DIR, "predictions.db")
 LOG_PATH = os.path.join(LOG_DIR, "predictions.log")
-MODEL_PATH = os.getenv("MODEL_PATH", "models/dt.pkl")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/model.pkl")
 API_KEY = os.getenv("API_KEY", "devkey")  # set a secret in env for prod
 
 os.makedirs(LOG_DIR, exist_ok=True)
