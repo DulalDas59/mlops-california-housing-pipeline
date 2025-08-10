@@ -1,23 +1,24 @@
 schema: '2.0'
 stages:
   train:
-    cmd: "python src/train.py --input data/raw/housing.csv --out models/dt.pkl --metrics
-      metrics/metrics.json --test-size 0.2 --random-state 42 --max-depth 8\n"
+    cmd: "python src/train.py --input data/raw/housing.csv --out models/model.pkl
+      --metrics metrics/metrics.json --test-size 0.2 --random-state 42 --max-depth
+      8 --mlflow\n"
     deps:
     - path: data/raw/housing.csv
       hash: md5
-      md5: 31d33b4cce116591df8b6d2ebff5de4f
-      size: 1896067
+      md5: d87d774472adae30df99e5993b92577f
+      size: 1896531
     - path: src/train.py
       hash: md5
-      md5: af47f312e91ac0e644a4f6ed4505899d
-      size: 4909
+      md5: 5f1bc81c0cedb83a8122e6d33abcebb7
+      size: 5396
     outs:
     - path: metrics/metrics.json
       hash: md5
-      md5: 4af5601c60b81ef07e26d1950b2f99aa
+      md5: d15cb7943a70c7c1b942a054d7ab588e
       size: 516
-    - path: models/dt.pkl
+    - path: models/model.pkl
       hash: md5
-      md5: 11cf13e9a65e5036d0ed13e6b6c98fe8
-      size: 35425
+      md5: c2dfd0e959c4d548ad639cfeb40f815c
+      size: 36865

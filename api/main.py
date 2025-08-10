@@ -114,7 +114,9 @@ PREDICTION_LATENCY_MS = Histogram(
     "prediction_latency_ms", "Prediction latency in milliseconds"
 )
 MODEL_VERSION = Gauge("model_version", "Current loaded model version")
-RETRAINS_TOTAL = Counter("retrain_jobs_total", "Total number of successful model retrains")
+RETRAINS_TOTAL = Counter("retrain_jobs_total", "Total number of successful model retrains", ["model_name"])
+RETRAINS_TOTAL.labels(model_name="model.pkl").inc()
+
 
 if current_model_version:
     MODEL_VERSION.set(current_model_version)
@@ -245,8 +247,17 @@ def retrain_from_dataframe(df: pd.DataFrame):
 
     return {"rmse": float(rmse), "r2": float(r2), "model_path": MODEL_PATH}
 
+RETRAIN_REQUESTS = Counter(
+    "retrain_requests_total", "Retrain API requests", ["status"]
+)
+RETRAIN_LATENCY_MS = Histogram(
+    "retrain_latency_ms", "Retrain latency in milliseconds"
+)
+
 @app.post("/retrain")
 def retrain(file: UploadFile = File(...), _: bool = Depends(require_api_key)):
+    t0 = perf_counter()
+    status = "error"
     # read CSV into DataFrame
     try:
         content_bytes = file.file.read()
@@ -264,6 +275,7 @@ def retrain(file: UploadFile = File(...), _: bool = Depends(require_api_key)):
             current_model_version += 1
             MODEL_VERSION.set(current_model_version)
             RETRAINS_TOTAL.inc()
+            status = "success"
             logger.info(
                 "Model reloaded from %s, version=%d, metrics=%s",
                 MODEL_PATH, current_model_version, result
@@ -272,3 +284,6 @@ def retrain(file: UploadFile = File(...), _: bool = Depends(require_api_key)):
         except Exception as e:
             logger.exception(f"Retrain failed: {e}")
             raise HTTPException(status_code=500, detail="Retrain failed")
+        finally:
+            RETRAIN_REQUESTS.labels(status=status).inc()
+            RETRAIN_LATENCY_MS.observe((perf_counter() - t0) * 1000.0)

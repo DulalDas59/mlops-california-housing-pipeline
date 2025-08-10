@@ -3,16 +3,17 @@ stages:
     cmd: >
       python src/train.py
       --input data/raw/housing.csv
-      --out models/dt.pkl
+      --out models/model.pkl
       --metrics metrics/metrics.json
       --test-size 0.2
       --random-state 42
       --max-depth 8
+      --mlflow
     deps:
       - src/train.py
       - data/raw/housing.csv
     outs:
-      - models/dt.pkl
+      - models/model.pkl
     metrics:
       - metrics/metrics.json:
           cache: false
