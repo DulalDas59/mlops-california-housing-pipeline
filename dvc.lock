@@ -1,0 +1,23 @@
+schema: '2.0'
+stages:
+  train:
+    cmd: "python src/train.py --input data/raw/housing.csv --out models/dt.pkl --metrics
+      metrics/metrics.json --test-size 0.2 --random-state 42 --max-depth 8\n"
+    deps:
+    - path: data/raw/housing.csv
+      hash: md5
+      md5: 79d5cb289430f29db47218f2b698370b
+      size: 1895976
+    - path: src/train.py
+      hash: md5
+      md5: af47f312e91ac0e644a4f6ed4505899d
+      size: 4909
+    outs:
+    - path: metrics/metrics.json
+      hash: md5
+      md5: 3fcf2dfe597bc093270e3da934fed237
+      size: 516
+    - path: models/dt.pkl
+      hash: md5
+      md5: e692c5270ad6b418fffaa39c7bf60337
+      size: 36433

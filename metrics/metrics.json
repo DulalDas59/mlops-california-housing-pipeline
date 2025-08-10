@@ -1,0 +1,26 @@
+{
+  "all_models": {
+    "DecisionTreeRegressor": {
+      "metrics": {
+        "r2": 0.6949297943401584,
+        "rmse": 0.6345224675463558
+      },
+      "params": {
+        "max_depth": 8,
+        "random_state": 42
+      }
+    },
+    "LinearRegression": {
+      "metrics": {
+        "r2": 0.5945147884186495,
+        "rmse": 0.7315341700824307
+      },
+      "params": {}
+    }
+  },
+  "chosen_metrics": {
+    "r2": 0.6949297943401584,
+    "rmse": 0.6345224675463558
+  },
+  "chosen_model": "DecisionTreeRegressor"
+}

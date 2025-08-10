@@ -1,0 +1,4 @@
+[core]
+    remote = azureremote
+[remote "azureremote"]
+    url = azure://mlopsdvc2025.blob.core.windows.net/dvc

@@ -5,6 +5,7 @@ import os
 from typing import Dict, Any
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
@@ -43,7 +44,8 @@ def split_xy(df: pd.DataFrame):
 
 
 def eval_regression(y_true, y_pred) -> Dict[str, float]:
-    rmse = float(mean_squared_error(y_true, y_pred, squared=False))
+    mse = mean_squared_error(y_true, y_pred)  # no 'squared' kw on old sklearn
+    rmse = float(np.sqrt(mse))
     r2 = float(r2_score(y_true, y_pred))
     return {"rmse": rmse, "r2": r2}
 

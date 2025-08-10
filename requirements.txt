@@ -11,5 +11,6 @@ prometheus-fastapi-instrumentator
 prometheus-client
 pydantic
 python-multipart
+watchdog
 
 

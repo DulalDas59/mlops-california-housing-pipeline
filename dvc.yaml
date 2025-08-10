@@ -1,12 +1,18 @@
 stages:
   train:
-    cmd: python src/train.py --input data/raw/housing.csv --out models/dt.pkl 
-      --metrics metrics.json
+    cmd: >
+      python src/train.py
+      --input data/raw/housing.csv
+      --out models/dt.pkl
+      --metrics metrics/metrics.json
+      --test-size 0.2
+      --random-state 42
+      --max-depth 8
     deps:
-    - data/raw/housing.csv
-    - src/train.py
+      - src/train.py
+      - data/raw/housing.csv
     outs:
-    - models/dt.pkl
+      - models/dt.pkl
     metrics:
-    - metrics.json:
-        cache: false
+      - metrics/metrics.json:
+          cache: false
