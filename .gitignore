@@ -8,5 +8,5 @@ mlruns/
 .env/
 .idea
 mlops/
-models/*.pkl
+#models/*.pkl
 data/raw/*.csv
