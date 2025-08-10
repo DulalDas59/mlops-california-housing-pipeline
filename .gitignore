@@ -10,3 +10,4 @@ mlruns/
 mlops/
 #models/*.pkl
 data/raw/*.csv
+.DS_Store
